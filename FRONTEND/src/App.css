@@ -1979,7 +1979,7 @@ button { -webkit-tap-highlight-color: transparent; }
     cursor: pointer;
 }
 .form input[type="file"]::file-selector-button:hover { filter: brightness(.96); }
-.activity-upload-preview { justify-content: flex-start; min-width: 0; }
+.activity-upload-preview { flex-direction: column; align-items: flex-start; justify-content: flex-start; min-width: 0; }
 .activity-upload-preview img { width: min(100%, 420px); max-height: 220px; }
 .activity-upload-preview .tb { min-height: 40px; padding: 9px 12px; border: 1px solid var(--line); border-radius: 9px; background: var(--soft); }
 .college-picker {

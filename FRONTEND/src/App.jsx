@@ -247,7 +247,7 @@ function AuthScreen({ d }) {
     const u = users.find((x) => x.email.toLowerCase() === f.email.trim().toLowerCase());
     if (!u) return setError("No account uses that email. Check the address or ask the Super Admin to confirm the account.");
     if (u.pw !== f.pw) return setError("That password does not match this account. Passwords are case-sensitive.");
-    if (u.status !== "Active") return setError("This account is inactive. Please contact the Super Admin.");
+    if (u.status !== "Active") return setError("This account is inactive. Please contact the College Admin.");
     if (u.role === "User" && !studentHasActiveCollegeAdmin(u, users, d.organizations)) return setError("Your college currently has no active Admin account, so student sign-in is disabled. Contact the Super Admin.");
     setMeId(u.id);
   }
@@ -399,9 +399,13 @@ function Profile({ d }) {
 
 /* ================= SUPER ADMIN ================= */
 function SuperAdminApp({ d, start }) {
-  const { users, setUsers, acts, setActs, enr, flash, organizations, setOrganizations } = d;
+  const { users, setUsers, acts, setActs, enr, setEnr, flash, organizations, setOrganizations } = d;
   const [page, setPage] = useState(start || "Overview");
+  const [adminDeactivationChoice, setAdminDeactivationChoice] = useState(null);
   const admins = users.filter((u) => u.role === "Admin"), students = users.filter((u) => u.role === "User");
+  // An organization stays assigned while its Admin is inactive; deleting that account frees it.
+  const assignedOrganizations = new Set(admins.map((admin) => admin.college));
+  const availableOrganizations = organizations.filter((org) => org.status === "Active" && !assignedOrganizations.has(org.name));
   const pending = acts.filter((a) => a.status === "Pending");
   const owner = (a) => users.find((u) => u.id === a.by);
   const totalHours = enr.filter((e) => e.attended).reduce((s, e) => s + Number(e.hours || 0), 0);
@@ -415,6 +419,7 @@ function SuperAdminApp({ d, start }) {
     const f = Object.fromEntries(new FormData(e.target)); const email = f.email.trim().toLowerCase();
     const organization = organizations.find((org) => org.name === f.organization && org.status === "Active");
     if (!organization) return flash("Choose an active college or office from the organization list.", true);
+    if (admins.some((admin) => admin.college === organization.name)) return flash(`${organization.name} already has an Admin account.`, true);
     if (!/^[^\s@]+@wmsu\.edu\.ph$/.test(email)) return flash("Use a WMSU email (name@wmsu.edu.ph).", true);
     if (f.pw !== f.pw2) return flash("The initial passwords do not match.", true);
     if (users.some((u) => u.email.toLowerCase() === email)) return flash("An account with this email already exists.", true);
@@ -437,7 +442,7 @@ function SuperAdminApp({ d, start }) {
   }
   function toggle(id) {
     const account = users.find((u) => u.id === id);
-    if (!account) return;
+    if (!account || account.role !== "Admin") return;
     const nextStatus = account.status === "Active" ? "Inactive" : "Active";
     setUsers(users.map((u) => (u.id === id ? { ...u, status: nextStatus } : u)));
     const isCollegeAdmin = organizations.some((org) => org.name === account.college && org.type === "College");
@@ -450,12 +455,12 @@ function SuperAdminApp({ d, start }) {
     if (!account) return;
     if (!window.confirm(`Permanently delete ${fullName(account)} (${account.email})? This removes the Admin account.`)) return;
     setUsers(users.filter((u) => u.id !== id));
+    setAdminDeactivationChoice(null);
     const anotherActiveAdmin = users.some((u) => u.id !== id && u.role === "Admin" && u.status === "Active" && u.college === account.college);
     const isCollegeAdmin = organizations.some((org) => org.name === account.college && org.type === "College");
     if (isCollegeAdmin && !anotherActiveAdmin) flash(`Admin deleted. Students in ${account.college} can’t sign in until an active Admin is assigned.`);
     else flash("Admin account permanently deleted.");
   }
-
   const Pending = ({ list }) => (
     <div className="tw"><table><thead><tr><th>ACTIVITY</th><th>REQUESTED BY</th><th>SCHEDULE</th><th>HOURS / SLOTS</th><th>DECISION</th></tr></thead><tbody>
       {list.map((a) => (
@@ -502,25 +507,25 @@ function SuperAdminApp({ d, start }) {
             <button className="btn sm" type="submit">＋ Add organization</button>
           </form>
           <div className="tw"><table><thead><tr><th>ORGANIZATION</th><th>TYPE</th><th>ADMIN ACCOUNTS</th><th>STATUS</th><th>ACTION</th></tr></thead><tbody>
-            {organizations.map((org) => <tr key={org.name}><td><strong>{org.name}</strong></td><td>{org.type}</td><td>{admins.filter((u) => u.college === org.name && u.status === "Active").length}</td><td><Badge s={org.status === "Active" ? "Open" : "Rejected"} /></td><td><button type="button" className="tb" onClick={() => toggleOrganization(org.name)}>{org.status === "Active" ? "Deactivate" : "Activate"}</button></td></tr>)}
+            {organizations.map((org) => <tr key={org.name}><td><strong>{org.name}</strong></td><td>{org.type}</td><td>{admins.filter((u) => u.college === org.name).length}</td><td><Badge s={org.status === "Active" ? "Open" : "Rejected"} /></td><td><button type="button" className="tb" onClick={() => toggleOrganization(org.name)}>{org.status === "Active" ? "Deactivate" : "Activate"}</button></td></tr>)}
             {!organizations.length && <Empty cols={5} text="No colleges or offices have been added." />}
           </tbody></table></div>
         </Panel>
       )}
       {page === "Admin Accounts" && (
-        <Panel eyebrow="SUPER ADMIN CONSOLE" title="Admin accounts" sub="Assign each admin account to a college or office. Deactivate to suspend an account or delete it permanently. Students in a college can sign in only while that college has an active Admin.">
+        <Panel eyebrow="SUPER ADMIN CONSOLE" title="Admin accounts" sub="Each college or office can have one Admin account. Deactivating suspends access but keeps the organization assigned; deleting the account makes it available again. Students in a college can sign in only while that college has an active Admin.">
           <form className="form" onSubmit={addAdmin}>
             <label>Last name<input name="last" required /></label>
             <label>First name<input name="first" required /></label>
             <label>Middle initial (optional)<input name="mi" maxLength={2} /></label>
-            <label className="w">Assigned college or office<select name="organization" defaultValue="" required><option value="">Select an organization</option>{organizations.filter((org) => org.status === "Active").map((org) => <option key={org.name} value={org.name}>{org.name} · {org.type}</option>)}</select></label>
+            <label className="w">Assigned college or office<select name="organization" defaultValue="" required disabled={!availableOrganizations.length}><option value="">{availableOrganizations.length ? "Select an organization" : "All active colleges and offices have an Admin"}</option>{availableOrganizations.map((org) => <option key={org.name} value={org.name}>{org.name} · {org.type}</option>)}</select>{!availableOrganizations.length && <small>Add a new college or office, or delete an Admin account to make an organization available again.</small>}</label>
             <label>WMSU email<input name="email" type="email" required placeholder="office@wmsu.edu.ph" /></label>
             <label>Initial password<input name="pw" type="password" minLength={8} required autoComplete="new-password" /></label>
             <label>Confirm initial password<input name="pw2" type="password" minLength={8} required autoComplete="new-password" /></label>
             <button className="btn sm" type="submit">＋ Create Admin</button>
           </form>
           <div className="tw"><table><thead><tr><th>ADMIN</th><th>COLLEGE / OFFICE</th><th>ACTIVITIES</th><th>STATUS</th><th>ACCOUNT ACTIONS</th></tr></thead><tbody>
-            {admins.map((u) => <tr key={u.id}><td><strong>{fullName(u)}</strong><small>{u.email}</small></td><td>{u.college}</td><td>{acts.filter((a) => a.by === u.id).length}</td><td><Badge s={u.status === "Active" ? "Open" : "Rejected"} /></td><td><button type="button" className="tb" onClick={() => toggle(u.id)}>{u.status === "Active" ? "Deactivate" : "Activate"}</button><button type="button" className="tb bad" onClick={() => deleteAdmin(u.id)}>Delete</button></td></tr>)}
+            {admins.map((u) => <tr key={u.id}><td><strong>{fullName(u)}</strong><small>{u.email}</small></td><td>{u.college}</td><td>{acts.filter((a) => a.by === u.id).length}</td><td><Badge s={u.status === "Active" ? "Open" : "Rejected"} /></td><td>{u.status === "Active" ? (adminDeactivationChoice === u.id ? <><button type="button" className="tb" onClick={() => { toggle(u.id); setAdminDeactivationChoice(null); }}>Confirm deactivate</button><button type="button" className="tb bad" onClick={() => deleteAdmin(u.id)}>Delete instead</button><button type="button" className="tb" onClick={() => setAdminDeactivationChoice(null)}>Cancel</button></> : <button type="button" className="tb" onClick={() => setAdminDeactivationChoice(u.id)}>Deactivate</button>) : <button type="button" className="tb" onClick={() => toggle(u.id)}>Activate</button>}</td></tr>)}
             {admins.length === 0 && <Empty cols={5} text="No admin accounts yet." />}
           </tbody></table></div>
         </Panel>
@@ -534,8 +539,8 @@ function SuperAdminApp({ d, start }) {
       )}
       {page === "Students" && (
         <Panel eyebrow="VOLUNTEER REGISTRY" title="Students" sub="Verified volunteer hours per student.">
-          <div className="tw"><table><thead><tr><th>STUDENT</th><th>ID NUMBER</th><th>COLLEGE</th><th>ACTIVITIES</th><th>HOURS</th><th>ACCOUNT</th></tr></thead><tbody>
-            {students.map((u) => <tr key={u.id}><td><strong>{fullName(u)}</strong><small>{u.email}</small></td><td>{u.idno}</td><td>{u.college}</td><td>{enr.filter((e) => e.userId === u.id && e.status === "Accepted").length}</td><td><b>{hoursOf(enr, u.id)}</b></td><td><button type="button" className="tb" onClick={() => toggle(u.id)}>{u.status === "Active" ? "Deactivate" : "Activate"}</button></td></tr>)}
+          <div className="tw"><table><thead><tr><th>STUDENT</th><th>ID NUMBER</th><th>COLLEGE</th><th>ACTIVITIES</th><th>HOURS</th><th>STATUS</th></tr></thead><tbody>
+            {students.map((u) => <tr key={u.id}><td><strong>{fullName(u)}</strong><small>{u.email}</small></td><td>{u.idno}</td><td>{u.college}</td><td>{enr.filter((e) => e.userId === u.id && e.status === "Accepted").length}</td><td><b>{hoursOf(enr, u.id)}</b></td><td><Badge s={u.status === "Active" ? "Open" : "Rejected"} /></td></tr>)}
             {students.length === 0 && <Empty cols={6} text="No students registered yet." />}
           </tbody></table></div>
         </Panel>
@@ -548,8 +553,9 @@ function SuperAdminApp({ d, start }) {
 /* ================= ADMIN ================= */
 const blank = { title: "", desc: "", category: CATEGORIES[0], date: "", time: "", endTime: "", location: "", hours: 3, slots: 20, colleges: [...COLLEGES], image: "" };
 function AdminApp({ d, start }) {
-  const { users, acts, setActs, enr, setEnr, flash, me, organizations } = d;
+  const { users, setUsers, acts, setActs, enr, setEnr, flash, me, organizations } = d;
   const [page, setPage] = useState(start || "Dashboard");
+  const [studentDeactivationChoice, setStudentDeactivationChoice] = useState(null);
   const [form, setForm] = useState(null);
   const [editId, setEditId] = useState(null);
   const [selectedActivity, setSelectedActivity] = useState(null);
@@ -568,10 +574,25 @@ function AdminApp({ d, start }) {
   const assignedCollege = collegeOptions.includes(me.college) ? me.college : "";
   const mine = acts.filter((a) => a.by === me.id);
   const myEnr = enr.filter((e) => mine.some((a) => a.id === e.actId));
+  const collegeStudents = users.filter((u) => u.role === "User" && u.college === me.college);
   const reqs = myEnr.filter((e) => e.status === "Pending");
   const stu = (id) => users.find((u) => u.id === id);
   const act = (id) => acts.find((a) => a.id === id);
   const shown = mine.filter((a) => (sf === "All" || statusOf(a) === sf) && [a.title, a.category, a.location].some((f) => f.toLowerCase().includes(q.trim().toLowerCase())));
+  function toggleStudent(id) {
+    setUsers(users.map((user) => user.id === id && user.role === "User" && user.college === me.college ? { ...user, status: user.status === "Active" ? "Inactive" : "Active" } : user));
+    setStudentDeactivationChoice(null);
+    flash("Student account status updated.");
+  }
+  function deleteStudent(id) {
+    const student = users.find((user) => user.id === id && user.role === "User" && user.college === me.college);
+    if (!student) return;
+    if (!window.confirm(`Permanently delete ${fullName(student)} (${student.email})? This also removes their enrollment records.`)) return;
+    setUsers(users.filter((user) => user.id !== id));
+    setEnr(enr.filter((enrollment) => enrollment.userId !== id));
+    setStudentDeactivationChoice(null);
+    flash("Student account and enrollment records permanently deleted.");
+  }
   const setF = (k) => (e) => setForm({ ...form, [k]: e.target.value });
   const toggleCollege = (college) => setForm({ ...form, colleges: form.colleges.includes(college) ? form.colleges.filter((c) => c !== college) : [...form.colleges, college] });
   const setTime = (k) => (e) => { const next = { ...form, [k]: e.target.value }; const h = calcHours(next.time, next.endTime); if (h) next.hours = h; setForm(next); };
@@ -614,7 +635,7 @@ function AdminApp({ d, start }) {
   const rejectLog = (e) => { setEnr(enr.map((x) => (x.id === e.id ? { ...x, attended: false, hours: 0, verified: false, logDate: "" } : x))); flash("Log rejected. The student can submit it again.", true); };
 
   return (
-    <Shell d={d} page={page} setPage={setPage} nav={[["Dashboard", "▦"], ["My Activities", "◈"], ["Requests", "✉", reqs.length], ["Attendance & Hours", "◷"], ["My Profile", "☺"]]}>
+    <Shell d={d} page={page} setPage={setPage} nav={[["Dashboard", "▦"], ["My Activities", "◈"], ["Requests", "✉", reqs.length], ["Attendance & Hours", "◷"], ["Student Accounts", "♧"], ["My Profile", "☺"]]}>
       {page === "Dashboard" && (
         <>
           <Hero title={`Welcome, ${me.first}.`} text="Create volunteer activities, accept student requests, and confirm attendance to log hours.">
@@ -638,6 +659,14 @@ function AdminApp({ d, start }) {
               {mine.length === 0 && <p className="note">Create an activity to begin tracking participants.</p>}</div>
           </Panel>
         </>
+      )}
+      {page === "Student Accounts" && (
+        <Panel eyebrow="COLLEGE REGISTRY" title="Student accounts" sub={`Manage student accounts assigned to ${me.college}. Deactivation suspends access; deleting an account also removes its enrollment records.`}>
+          <div className="tw"><table><thead><tr><th>STUDENT</th><th>ID NUMBER</th><th>COLLEGE</th><th>ACTIVITIES</th><th>HOURS</th><th>ACCOUNT ACTIONS</th></tr></thead><tbody>
+            {collegeStudents.map((u) => <tr key={u.id}><td><strong>{fullName(u)}</strong><small>{u.email}</small></td><td>{u.idno}</td><td>{u.college}</td><td>{enr.filter((e) => e.userId === u.id && e.status === "Accepted").length}</td><td><b>{hoursOf(enr, u.id)}</b></td><td>{u.status === "Active" ? (studentDeactivationChoice === u.id ? <><button type="button" className="tb" onClick={() => toggleStudent(u.id)}>Confirm deactivate</button><button type="button" className="tb bad" onClick={() => deleteStudent(u.id)}>Delete instead</button><button type="button" className="tb" onClick={() => setStudentDeactivationChoice(null)}>Cancel</button></> : <button type="button" className="tb" onClick={() => setStudentDeactivationChoice(u.id)}>Deactivate</button>) : <button type="button" className="tb" onClick={() => toggleStudent(u.id)}>Activate</button>}</td></tr>)}
+            {collegeStudents.length === 0 && <Empty cols={6} text="No student accounts are assigned to your college." />}
+          </tbody></table></div>
+        </Panel>
       )}
       {page === "My Activities" && (
         <Panel eyebrow="PROGRAM MANAGEMENT" title="Volunteer activities" sub="New activities are reviewed by the Super Admin before students can see them."
@@ -863,7 +892,7 @@ function StudentApp({ d, start }) {
         {page === "Hours & Certificate" && (
           <Panel eyebrow="COMPLETION RECORDS" title="Hours report & certificates" sub={`Total logged: ${plural(total, "hour")} across ${plural(logged.length, "activity").replace("activitys", "activities")}. Certificates use the name and college saved in your profile.`}>
             <div className="tw noprint"><table><thead><tr><th>ACTIVITY</th><th>DATE</th><th>HOURS</th><th>REVIEW</th><th>CERTIFICATE</th></tr></thead><tbody>
-              {logged.map((e) => <tr key={e.id}><td><strong>{act(e.actId).title}</strong></td><td>{fmtDate(e.logDate)}</td><td>{e.hours} / {act(e.actId).hours}</td><td><Badge s={e.verified ? "Verified" : "Logged"} /></td><td>{done(e) ? <span className="bd ok">🎓 Released</span> : "—"}</td></tr>)}
+              {logged.map((e) => <tr key={e.id}><td><strong>{act(e.actId).title}</strong></td><td>{fmtDate(e.logDate)}</td><td>{e.hours} / {act(e.actId).hours}</td><td><Badge s={e.verified ? "Verified" : "Logged"} /></td><td>{done(e) ? <span className="bd ok"> Released</span> : "—"}</td></tr>)}
               {logged.length === 0 && <Empty cols={5} text="No hours logged yet. Log your attendance under My Enrollments." />}
             </tbody></table></div>
             {cert ? (
@@ -884,7 +913,7 @@ function StudentApp({ d, start }) {
                 <p className="note noprint">Use Print and choose “Save as PDF”, or download the PDF directly.</p>
               </>
             ) : (
-              <p className="note" style={{ marginTop: 18 }}>🎓 Certificates are released only after an approved participant records the full scheduled hours, the coordinator verifies attendance, and the activity is marked completed.</p>
+              <p className="note" style={{ marginTop: 18 }}> Certificates are released only after an approved participant records the full scheduled hours, the coordinator verifies attendance, and the activity is marked completed.</p>
             )}
           </Panel>
         )}
